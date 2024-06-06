@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name: Cache Using Gzip
- * Version: 2.7
+ * Version: 2.7.1
  * Description: Creates gzipped files on your server to immensly improve page speed for site visitors
  * Author: Cache Using Gzip
  * Author URI: https://wpgzipcache.com
@@ -9,9 +9,9 @@
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * WC requires at least: 8.6.0
  * WC tested up to: 8.7.0
- * Tested up to: 6.5.2
- * Requires PHP: 7.4
  * Requires at least: 6.4.3
+ * Tested up to: 6.5.4
+ * Requires PHP: 7.4
  */
 
 if (!defined('ABSPATH')) exit;

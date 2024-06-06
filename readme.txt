@@ -2,9 +2,9 @@
 Contributors: marknokes
 Tags: gzip, cache, speed, performance, nginx
 Requires at least: 6.4.3
-Tested up to: 6.5.3
-Requires PHP: 7.2
-Stable tag: 2.7
+Tested up to: 6.5.4
+Requires PHP: 7.4
+Stable tag: 2.7.1
 License: GPLv2
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -54,6 +54,10 @@ download the required configuration from the plugin settings page.
 Automatic updates should work generally smoothly, but we still recommend you back up your site.
 
 == Changelog ==
+
+= 2.7.1 =
+
+* Bugfix: Issue caching homepage when set to display latest posts instead of static page
 
 = 2.7 =
 
