@@ -585,6 +585,7 @@ class GzipCache
 
 	    	} else {
 	    		
+	    		// phpcs:ignore WordPress.WP.EnqueuedResources.NonEnqueuedScript
 	    		return '<script src="'.$matches[1].'">';
 		        
 	    	}
