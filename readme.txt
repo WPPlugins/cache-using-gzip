@@ -1,10 +1,10 @@
-=== Cache Using Gzip - Gzip performance for fast page loading ===
+=== Cache Using Gzip ===
 Contributors: marknokes
 Tags: gzip, cache, speed, performance, nginx
 Requires at least: 6.4.3
 Tested up to: 6.7.2
 Requires PHP: 7.4
-Stable tag: 2.8.1
+Stable tag: 2.8.2
 License: GPLv2
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -57,6 +57,10 @@ download the required configuration from the plugin settings page (Tools => Cach
 Automatic updates should work generally smoothly, but we still recommend you back up your site.
 
 == Changelog ==
+
+= 2.8.2 =
+
+* Add sanitize methods for register_setting
 
 = 2.8.1 =
 
