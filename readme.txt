@@ -2,9 +2,9 @@
 Contributors: marknokes
 Tags: gzip, cache, speed, performance, nginx
 Requires at least: 6.4.3
-Tested up to: 6.7.2
+Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.8.3
+Stable tag: 2.8.4
 License: GPLv2
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -57,6 +57,14 @@ download the required configuration from the plugin settings page (Tools => Cach
 Automatic updates should work generally smoothly, but we still recommend you back up your site.
 
 == Changelog ==
+
+= 2.8.4 =
+Improvement: remove superfluous import statements
+Improvement: normalize line endings
+Improvement: add docblocks to class properties
+Improvement: add docblocks to class methods
+Improvement: php cs fixer
+Improvement: add gitattributes
 
 = 2.8.3 =
 * Improve option handling
