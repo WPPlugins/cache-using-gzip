@@ -4,7 +4,7 @@ Tags: gzip, cache, speed, performance, nginx
 Requires at least: 6.4.3
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 2.8.5
+Stable tag: 2.8.6
 License: GPLv2
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -15,6 +15,32 @@ Creates gzip files on your server to immensly improve page speed for site visito
 The [Cache Using Gzip](https://wpgzipcache.com/) plugin for WordPress improves page speed for site visitors. Preload the
 cache in settings, download the required config settings and add to your Apache or Nginx server config, and all of
 your posts and pages will be delivered to site visitors blazingly fast!
+
+= Cache Using Gzip Features =
+- Unlimited downloads
+- Unlimited domains 
+
+= Cache Using Gzip Premium Features =
+- Unlimited downloads
+- 1 domain
+- Support for custom post types
+- A cache link on posts and pages let you cache individual items on the fly
+- Cache WooCommerce products and product category/tag archives
+- Exclude a list of page slugs from ever being cached
+- Use the bulk edit menu for pages, posts, etc. to cache a selection 
+
+= Cache Using Gzip Enterprise Features =
+- Unlimited downloads
+- Unlimited domains
+- Support for custom post types
+- A cache link on posts and pages let you cache individual items on the fly
+- Cache WooCommerce products and product category/tag archives
+- Exclude a list of page slugs from ever being cached
+- Use the bulk edit menu for pages, posts, etc. to cache a selection
+- Specify a date before which items will not be cached
+- Enterprise priority support 
+
+[Compare plans at https://wpgzipcache.com/compare-plans/](https://wpgzipcache.com/compare-plans/)
 
 == Frequently Asked Questions ==
 
@@ -57,6 +83,9 @@ download the required configuration from the plugin settings page (Tools => Cach
 Automatic updates should work generally smoothly, but we still recommend you back up your site.
 
 == Changelog ==
+
+= 2.8.6 =
+Bugfix: Adding inline scripts causes console error for modules
 
 = 2.8.5 =
 Improvement: remove superfluous import statements
