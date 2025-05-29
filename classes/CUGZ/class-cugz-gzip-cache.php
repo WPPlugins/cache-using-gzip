@@ -46,11 +46,19 @@ class GzipCache
             'sanitize_callback' => 'sanitize_text_field',
         ],
         'cugz_inline_js_css' => [
-            'name' => 'Move css/js inline',
+            'name' => 'Move css/js inline:',
             'type' => 'checkbox',
             'description' => 'Removes links to local css/js and replaces with their contents. This may or may not break some theme layouts or functionality.',
             'default_value' => 0,
             'sanitize_callback' => 'CUGZ\GzipCache::cugz_sanitize_number',
+        ],
+        'cugz_auto_preload' => [
+            'name' => 'Auto preload:',
+            'type' => 'select',
+            'description' => 'Refresh the entire cache automatically at the specified interval',
+            'options' => ['never', 'hourly', 'twicedaily', 'daily', 'weekly'],
+            'default_value' => 'never',
+            'sanitize_callback' => 'sanitize_text_field',
         ],
         'cugz_never_cache' => [
             'name' => 'Never cache:',
@@ -61,7 +69,7 @@ class GzipCache
             'sanitize_callback' => 'sanitize_text_field',
         ],
         'cugz_include_archives' => [
-            'name' => 'Cache archives on preload, update, publish',
+            'name' => 'Cache archives on preload, update, publish:',
             'type' => 'checkbox',
             'is_premium' => true,
             'description' => 'This could increase preload time significantly if you have many categories/tags',
@@ -69,7 +77,7 @@ class GzipCache
             'sanitize_callback' => 'CUGZ\GzipCache::cugz_sanitize_number',
         ],
         'cugz_datepicker' => [
-            'name' => 'Don\'t cache items before',
+            'name' => 'Don\'t cache items before:',
             'type' => 'datepicker',
             'is_enterprise' => true,
             'description' => 'If you have a large number of pages/posts/etc., specify a date before which items will not be cached.',
@@ -84,6 +92,13 @@ class GzipCache
      * @var array
      */
     public $cugz_plugin_post_types = [];
+
+    /**
+     * Cron options for refreshing the home and blog pages.
+     *
+     * @var array
+     */
+    public $cugz_auto_preload = [];
 
     /**
      * Whether to place CSS inline on cached page.
@@ -246,6 +261,8 @@ class GzipCache
 
         add_action('cugz_post_options_page', [$this, 'cugz_post_options_page']);
 
+        add_action('cugz_cron_auto_preload', [$this, 'cugz_preload_cache']);
+
         if ($this->zlib_enabled) {
             add_action('admin_menu', [$this, 'cugz_register_options_page']);
         }
@@ -284,10 +301,26 @@ class GzipCache
      * @param mixed  $new_value   the new value of the option
      * @param string $option_name the name of the option to clear the cache for
      */
-    public static function cugz_clear_option_cache($old_value, $new_value, $option_name)
+    public static function cugz_on_update_option($old_value, $new_value, $option_name)
     {
         if (array_key_exists($option_name, self::$options)) {
             wp_cache_delete($option_name, 'options');
+        }
+
+        switch ($option_name) {
+            case 'cugz_auto_preload':
+                if ($time = wp_next_scheduled('cugz_cron_auto_preload')) {
+                    wp_unschedule_event($time, 'cugz_cron_auto_preload');
+                }
+
+                if ('never' !== $new_value) {
+                    wp_schedule_event(time(), self::cugz_get_option($option_name), 'cugz_cron_auto_preload');
+                }
+
+                break;
+
+            default:
+                break;
         }
     }
 
@@ -310,7 +343,7 @@ class GzipCache
             $option_value = get_option($option_name);
 
             if (false === $option_value) {
-                $option_value = self::$options[$option_name]['default'] ?? false;
+                $option_value = self::$options[$option_name]['default_value'] ?? false;
 
                 add_option($option_name, $option_value, '', false);
             }
@@ -417,6 +450,8 @@ class GzipCache
 
             delete_option($option);
         }
+
+        wp_unschedule_event(wp_next_scheduled('cugz_cron_auto_preload'), 'cugz_cron_auto_preload');
     }
 
     /**
@@ -689,6 +724,28 @@ class GzipCache
     }
 
     /**
+     * Handles preloading.
+     *
+     * This function cleans the cache directory, caches the blog and all other relevent pages
+     */
+    public function cugz_preload_cache()
+    {
+        $this->cugz_clean_dir();
+
+        self::update_option('cugz_status', 'processing');
+
+        $this->cugz_cache_blog_page();
+
+        foreach ($this->cugz_get_links() as $url) {
+            if ($dir = $this->cugz_create_folder_structure_from_url($url)) {
+                $this->cugz_cache_page($url, $dir);
+            }
+        }
+
+        self::update_option('cugz_status', 'preloaded');
+    }
+
+    /**
      * Handles the AJAX callback for the plugin.
      *
      * This function checks for security nonce, and then performs various actions based on the 'do' parameter passed in the AJAX request.
@@ -718,19 +775,7 @@ class GzipCache
                 break;
 
             case 'regen':
-                $this->cugz_clean_dir();
-
-                self::update_option('cugz_status', 'processing');
-
-                $this->cugz_cache_blog_page();
-
-                foreach ($this->cugz_get_links() as $url) {
-                    if ($dir = $this->cugz_create_folder_structure_from_url($url)) {
-                        $this->cugz_cache_page($url, $dir);
-                    }
-                }
-
-                self::update_option('cugz_status', 'preloaded');
+                $this->cugz_preload_cache();
 
                 break;
 
@@ -885,7 +930,7 @@ class GzipCache
 
             $this->{$option} = self::cugz_get_option($option);
 
-            add_action("update_option_{$option}", [$this, 'cugz_clear_option_cache'], 10, 3);
+            add_action("update_option_{$option}", [$this, 'cugz_on_update_option'], 10, 3);
         }
     }
 
@@ -1209,7 +1254,7 @@ class GzipCache
      */
     private static function update_option($option, $value)
     {
-        self::cugz_clear_option_cache('', $value, $option);
+        self::cugz_on_update_option('', $value, $option);
 
         update_option($option, $value, false);
     }
