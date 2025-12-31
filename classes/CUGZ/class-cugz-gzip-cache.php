@@ -430,17 +430,19 @@ class GzipCache
      */
     public function cugz_dequeue_scripts()
     {
-        global $post;
+        if (function_exists('wpcf7')) {
+            global $post;
 
-        if ($post) {
-            if (false === strpos($post->post_content, '[contact-form-7')) {
-                add_filter('wpcf7_load_js', '__return_false');
+            if ($post && !has_shortcode($post->post_content, 'contact-form-7')) {
+                wp_dequeue_style('contact-form-7');
 
-                add_filter('wpcf7_load_css', '__return_false');
+                wp_dequeue_script('contact-form-7');
 
                 wp_dequeue_script('google-recaptcha');
 
                 wp_dequeue_script('wpcf7-recaptcha');
+
+                wp_dequeue_script('cloudflare-turnstile');
             }
         }
     }
@@ -1009,7 +1011,7 @@ class GzipCache
     {
         $wp_path = ABSPATH;
 
-        $doc_root = isset($_SERVER['DOCUMENT_ROOT']) ? rtrim(sanitize_text_field(wp_unslash($_SERVER['DOCUMENT_ROOT'])), '/').'/': '/';
+        $doc_root = isset($_SERVER['DOCUMENT_ROOT']) ? rtrim(sanitize_text_field(wp_unslash($_SERVER['DOCUMENT_ROOT'])), '/').'/' : '/';
 
         $subdirectory = '/';
 
