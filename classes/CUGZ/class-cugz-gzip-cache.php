@@ -2,6 +2,10 @@
 
 namespace CUGZ;
 
+if (!defined('ABSPATH')) {
+    exit;
+}
+
 use Automattic\WooCommerce\Utilities\FeaturesUtil;
 
 class GzipCache
@@ -630,6 +634,8 @@ class GzipCache
                 $this->cugz_cache_page($url, $dir);
             }
         }
+
+        $this->cugz_cache_blog_page();
     }
 
     /**
