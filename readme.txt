@@ -1,10 +1,10 @@
 === Cache Using Gzip ===
 Contributors: marknokes
-Tags: cache, caching, performance, gzip, speed, page cache, site speed, html cache, server cache, http compression, apache, nginx
+Tags: cache, caching, performance, gzip, speed
 Requires at least: 6.4.3
-Tested up to: 7
+Tested up to: 7.2
 Requires PHP: 7.4
-Stable tag: 2.9.3
+Stable tag: 2.9.9
 License: GPLv2
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -101,6 +101,25 @@ If Cache Using Gzip helps speed up your site, please consider leaving a review. 
 Automatic updates should work generally smoothly, but we still recommend you back up your site.
 
 == Changelog =
+
+= 2.9.9 =
+Improvement: Send Last-Modified and X-Cache-Status headers on cached pages so WordPress Site Health detects the page cache. The plugin's .htaccess rules are refreshed automatically on update. Nginx users can optionally add `add_header X-Cache-Status "HIT";` to the two cache-file locations in their config (see the downloadable config on the settings page).
+Bugfix: Premium/Enterprise license check reported success for an unregistered domain when the registration server's reply was an error or unexpected. The notice now says the domain is not registered, or that it could not be verified.
+
+= 2.9.8 =
+Bugfix: Failed body fetch writes emtpy cache file
+
+= 2.9.7 =
+Improvement: Honor DONOTCACHEPAGE contstant for WooCommerce and other plugin support
+
+= 2.9.6 =
+Improvement: Move cache generation into a WP-Cron background job during edit/publish
+
+= 2.9.5 =
+Improvement: Create more reliable get_host method used in creating file paths.
+
+= 2.9.4 =
+Improvement: Prevent auto tag/category preloading on post preview
 
 = 2.9.3 =
 Bugfix: Under certain circumstances the homepage wasn't being cached when it was set to show latest posts

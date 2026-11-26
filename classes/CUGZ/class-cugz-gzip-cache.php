@@ -32,6 +32,22 @@ class GzipCache
     public static $cugz_options_page_url = 'tools.php?page=cugz_gzip_cache';
 
     /**
+     * Request header sent on the plugin's own page-generation requests.
+     * It is how the page being generated knows to report DONOTCACHEPAGE.
+     *
+     * @var string
+     */
+    const CACHE_REQUEST_HEADER = 'X-CUGZ-Cache-Request';
+
+    /**
+     * Appended to the end of a generated page that defined DONOTCACHEPAGE,
+     * so cugz_cache_page() can tell the page asked not to be cached.
+     *
+     * @var string
+     */
+    const DO_NOT_CACHE_MARKER = '<!--cugz-do-not-cache-->';
+
+    /**
      * Plugin options array.
      *
      * @var array
@@ -84,7 +100,7 @@ class GzipCache
             'name' => 'Cache archives on preload, update, publish:',
             'type' => 'checkbox',
             'is_premium' => true,
-            'description' => 'This could increase preload time significantly if you have many categories/tags',
+            'description' => 'Preloading is done in the background via WP Cron.',
             'default_value' => 0,
             'sanitize_callback' => 'CUGZ\GzipCache::cugz_sanitize_number',
         ],
@@ -268,11 +284,18 @@ class GzipCache
 
         add_action('admin_init', [$this, 'cugz_register_settings']);
 
+        add_action('admin_init', [$this, 'cugz_maybe_update_htaccess']);
+
         add_action('wp_ajax_cugz_callback', [$this, 'cugz_callback']);
 
         add_action('before_woocommerce_init', [$this, 'cugz_wc_declare_compatibility']);
 
         add_action('transition_post_status', [$this, 'cugz_transition_post_status'], 10, 3);
+
+        add_action('cugz_async_refresh_cache', [$this, 'cugz_async_refresh_cache'], 10, 3);
+
+        // Last, so DONOTCACHEPAGE set by any other plugin on template_redirect is seen.
+        add_action('template_redirect', [$this, 'cugz_report_do_not_cache'], PHP_INT_MAX);
 
         add_action('admin_enqueue_scripts', [$this, 'cugz_enqueue_admin_scripts']);
 
@@ -489,7 +512,13 @@ class GzipCache
             delete_option($option);
         }
 
+        delete_option('cugz_htaccess_version');
+
         wp_unschedule_event(wp_next_scheduled('cugz_cron_auto_preload'), 'cugz_cron_auto_preload');
+
+        wp_unschedule_hook('cugz_async_refresh_cache');
+
+        wp_unschedule_hook('cugz_async_refresh_product_cache');
     }
 
     /**
@@ -564,58 +593,130 @@ class GzipCache
     /**
      * This function handles the transition of a post's status.
      *
+     * Cache generation involves one or more HTTP requests per URL (the post
+     * itself, plus any archives), which can be slow. Rather than block the
+     * post save/publish request, the actual cache work is handed off to a
+     * background WP-Cron event so the editor gets an immediate response.
+     *
      * @param string $new_status the new status of the post
      * @param string $old_status the old status of the post
      * @param object $post       the post object
      */
     public function cugz_transition_post_status($new_status, $old_status, $post)
     {
-        $status_array = [
-            'trash',
-            'draft',
-            'publish',
-        ];
-
+        // Ignore revisions/autosaves
         if (
-            'trash' === $old_status
-            || 'product' === $post->post_type
-            || !in_array($new_status, $status_array)
-            || !in_array($post->post_type, $this->cugz_plugin_post_types)
+            wp_is_post_revision($post->ID)
+            || wp_is_post_autosave($post->ID)
         ) {
             return;
         }
 
-        switch ($new_status) {
-            case 'trash':
-            case 'draft':
-                $clone = clone $post;
-
-                $clone->post_status = 'publish';
-
-                $permalink = str_replace('__trashed', '', get_permalink($clone));
-
-                if ($dir = $this->cugz_create_folder_structure_from_url($permalink)) {
-                    $this->cugz_clean_dir($dir);
-                }
-
-                break;
-
-            case 'publish':
-                $url = get_permalink($post);
-
-                if ($dir = $this->cugz_create_folder_structure_from_url($url)) {
-                    $this->cugz_cache_page($url, $dir);
-                }
-
-                break;
-
-            default:
-                // do nothing
-
-                break;
+        // Ignore unsupported post types
+        if (
+            'product' === $post->post_type
+            || !in_array($post->post_type, $this->cugz_plugin_post_types, true)
+        ) {
+            return;
         }
 
-        $this->cugz_refresh_archives($post);
+        // Ignore auto-drafts entirely
+        if ('auto-draft' === $old_status) {
+            return;
+        }
+
+        // Only these transitions require cache changes:
+        // draft/future/publish -> publish, or publish -> draft/trash/private
+        if ('publish' !== $new_status && 'publish' !== $old_status) {
+            return;
+        }
+
+        $this->cugz_schedule_async_refresh($post->ID, $new_status, $old_status);
+    }
+
+    /**
+     * Schedules a background WP-Cron event to refresh the cache for a post,
+     * then nudges cron to run right away instead of waiting for its next
+     * scheduled check.
+     *
+     * @param int    $post_id    the ID of the post to refresh
+     * @param string $new_status the new status of the post
+     * @param string $old_status the old status of the post
+     */
+    public function cugz_schedule_async_refresh($post_id, $new_status, $old_status)
+    {
+        $args = [$post_id, $new_status, $old_status];
+
+        if (!wp_next_scheduled('cugz_async_refresh_cache', $args)) {
+            wp_schedule_single_event(time(), 'cugz_async_refresh_cache', $args);
+        }
+
+        spawn_cron();
+    }
+
+    /**
+     * Background handler for 'cugz_async_refresh_cache'. Re-fetches the post
+     * (state may have changed since scheduling) and performs the actual
+     * cache/clear work that used to run inline on transition_post_status.
+     *
+     * @param int    $post_id    the ID of the post to refresh
+     * @param string $new_status the new status of the post at schedule time
+     * @param string $old_status the old status of the post at schedule time
+     */
+    public function cugz_async_refresh_cache($post_id, $new_status, $old_status)
+    {
+        $post = get_post($post_id);
+
+        if (!$post) {
+            return;
+        }
+
+        /*
+         * CACHE / PRELOAD
+         *
+         * Handles:
+         * - draft -> publish
+         * - future -> publish
+         * - publish -> publish
+         */
+        if ('publish' === $new_status) {
+            $url = get_permalink($post);
+
+            if ($dir = $this->cugz_create_folder_structure_from_url($url)) {
+                $this->cugz_cache_page($url, $dir);
+            }
+
+            $this->cugz_refresh_archives($post);
+
+            return;
+        }
+
+        /*
+         * CLEAR CACHE
+         *
+         * Handles:
+         * - publish -> draft
+         * - publish -> trash
+         * - publish -> private
+         */
+        if ('publish' === $old_status && 'publish' !== $new_status) {
+            $clone = clone $post;
+
+            // Force permalink generation for previously published URL
+            $clone->post_status = 'publish';
+
+            $permalink = str_replace(
+                '__trashed',
+                '',
+                get_permalink($clone)
+            );
+
+            if ($dir = $this->cugz_create_folder_structure_from_url($permalink)) {
+                $this->cugz_clean_dir($dir);
+            }
+
+            $this->cugz_refresh_archives($post);
+        }
     }
 
     /**
@@ -680,7 +781,12 @@ class GzipCache
         }
 
         if (isset($CUGZ_GzipCachePluginExtras)) {
-            $links = $CUGZ_GzipCachePluginExtras->get_archive_links($links, $term_ids, $cat_ids);
+            // Only refresh WooCommerce product category archives during a
+            // full preload or when refreshing an actual product — an
+            // unrelated post/page publish has no bearing on them.
+            $include_product_archives = $is_preload || method_exists($post, 'get_id');
+
+            $links = $CUGZ_GzipCachePluginExtras->get_archive_links($links, $term_ids, $cat_ids, $include_product_archives);
         }
 
         return $links;
@@ -725,7 +831,30 @@ class GzipCache
     }
 
     /**
+     * On the plugin's own page-generation request only, buffers the page so
+     * that if anything defined DONOTCACHEPAGE while building it (this runs
+     * last on template_redirect, and the buffer is read at the very end, so a
+     * shortcode or template defining it later is caught too), a marker is
+     * appended for cugz_cache_page() to find. Pages are generated by a
+     * separate loopback request, so the constant is invisible to the process
+     * that writes the file; the page has to say so itself.
+     */
+    public function cugz_report_do_not_cache()
+    {
+        if (!isset($_SERVER['HTTP_X_CUGZ_CACHE_REQUEST'])) {
+            return;
+        }
+
+        ob_start(function ($buffer) {
+            return defined('DONOTCACHEPAGE') && DONOTCACHEPAGE ? $buffer.self::DO_NOT_CACHE_MARKER : $buffer;
+        });
+    }
+
+    /**
      * Caches a page by retrieving its HTML content and saving it to a specified directory.
+     *
+     * A page that defined DONOTCACHEPAGE is not stored, and any copy stored
+     * earlier is removed so it stops being served.
      *
      * @param string $url the URL of the page to be cached
      * @param string $dir The directory where the cached page will be saved. Defaults to the cache directory specified in the class.
@@ -752,9 +881,20 @@ class GzipCache
             $args = ['timeout' => 15];
         }
 
-        $response = wp_remote_get($url, $args);
+        $args['headers'] = [self::CACHE_REQUEST_HEADER => '1'];
 
-        $html = wp_remote_retrieve_body($response);
+        $html = $this->cugz_fetch_body($url, $args);
+
+        // A failed or blank response must never create or overwrite a cache file.
+        if (false === $html) {
+            return false;
+        }
+
+        if (false !== strpos($html, self::DO_NOT_CACHE_MARKER)) {
+            $this->cugz_remove_cached_page($dir);
+
+            return false;
+        }
 
         if ('1' === $this->cugz_inline_js_css) {
             $html = $this->cugz_parse_html($html);
@@ -763,6 +903,35 @@ class GzipCache
         $wp_filesystem->put_contents($dir.$this->cugz_get_filename(), $html);
 
         return $wp_filesystem->put_contents($dir.$this->cugz_get_filename('_gz'), gzencode($html, 9)) ? true : false;
+    }
+
+    /**
+     * Fetches a URL and returns its body, or false if the request failed,
+     * did not return HTTP 200, or came back empty. Failures are logged.
+     *
+     * @param string $url  the URL to fetch
+     * @param array  $args optional wp_remote_get arguments
+     *
+     * @return false|string the response body, or false on failure
+     */
+    protected function cugz_fetch_body($url, $args = [])
+    {
+        $response = wp_remote_get($url, $args);
+
+        if (is_wp_error($response)) {
+            $reason = $response->get_error_message();
+        } elseif (200 !== wp_remote_retrieve_response_code($response)) {
+            $reason = 'HTTP '.wp_remote_retrieve_response_code($response);
+        } elseif ('' === trim(wp_remote_retrieve_body($response))) {
+            $reason = 'empty response body';
+        } else {
+            return wp_remote_retrieve_body($response);
+        }
+
+        // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+        error_log(sprintf('Cache Using Gzip: not caching %s (%s)', $url, $reason));
+
+        return false;
     }
 
     /**
@@ -1010,7 +1179,7 @@ class GzipCache
 
     /**
      * Gets the directory name if wordpress is installed in a subdir.
-     *     *
+     *
      * @return string name of subdirectory or /
      */
     protected function get_install_dir()
@@ -1096,6 +1265,69 @@ class GzipCache
         }
 
         return true;
+    }
+
+    /**
+     * Replaces the plugin's existing .htaccess block with the current template.
+     *
+     * The block is only written on activation, so after a plugin update it
+     * would otherwise stay stale until the plugin was reactivated.
+     *
+     * @return bool true if the block is current (or there is none to update), false if it could not be rewritten
+     */
+    protected function cugz_refresh_htaccess()
+    {
+        $this->cugz_get_filesystem();
+
+        global $wp_filesystem;
+
+        $file_path = ABSPATH.'.htaccess';
+
+        if (!$wp_filesystem || !file_exists($file_path)) {
+            return true;
+        }
+
+        $existing_content = $wp_filesystem->get_contents($file_path);
+
+        $start_tag = "# BEGIN {$this->plugin_name}";
+
+        $end_tag = "# END {$this->plugin_name}";
+
+        $start_pos = strpos((string) $existing_content, $start_tag);
+
+        $end_pos = strpos((string) $existing_content, $end_tag);
+
+        // No block of ours (e.g. nginx, or removed by hand): nothing to refresh.
+        if (false === $start_pos || false === $end_pos || $end_pos < $start_pos) {
+            return true;
+        }
+
+        $directives = $wp_filesystem->get_contents(dirname(CUGZ_PLUGIN_PATH).'/templates/htaccess.sample');
+
+        if (!$directives) {
+            return false;
+        }
+
+        $directives = str_replace('[CUGZ_REWRITE_BASE]', $this->get_install_dir(), $directives);
+
+        $new_content = substr($existing_content, 0, $start_pos).trim($directives).substr($existing_content, $end_pos + strlen($end_tag));
+
+        return false !== $wp_filesystem->put_contents($file_path, $new_content);
+    }
+
+    /**
+     * Refreshes the .htaccess block once after each plugin version change.
+     * The version is only recorded on success, so a failed write is retried.
+     */
+    public function cugz_maybe_update_htaccess()
+    {
+        if (get_option('cugz_htaccess_version') === $this->plugin_version) {
+            return;
+        }
+
+        if ($this->cugz_refresh_htaccess()) {
+            update_option('cugz_htaccess_version', $this->plugin_version, false);
+        }
     }
 
     /**
@@ -1240,11 +1472,10 @@ class GzipCache
 
         foreach ($matches_css_links[1] as $css_link) {
             if ($this->cugz_is_local_script($css_link)) {
-                $css_content = wp_remote_retrieve_body(wp_remote_get($css_link));
+                $css_content = $this->cugz_fetch_body($css_link);
 
                 if (false === $css_content) {
-                    // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-                    error_log('Error: Unable to retrieve css content from '.$css_link);
+                    continue;
                 }
 
                 $css_content = $this->fix_css_urls($css_content, $css_link);
@@ -1255,11 +1486,10 @@ class GzipCache
 
         return preg_replace_callback($pattern_script_link, function ($matches) {
             if ($this->cugz_is_local_script($matches[1])) {
-                $script_content = wp_remote_retrieve_body(wp_remote_get($matches[1]));
+                $script_content = $this->cugz_fetch_body($matches[1]);
 
                 if (false === $script_content) {
-                    // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-                    error_log('Error: Unable to retrieve script content from '.$matches[1]);
+                    return $matches[0];
                 }
 
                 if (0 === strpos($script_content, 'import')) {
@@ -1300,6 +1530,24 @@ class GzipCache
         }
 
         return $wp_filesystem->rmdir($dir);
+    }
+
+    /**
+     * Deletes the cached files (http and https, plain and gzipped) for one page directory.
+     *
+     * @param string $dir the page's cache directory
+     */
+    protected function cugz_remove_cached_page($dir)
+    {
+        foreach (['', '-https'] as $scheme) {
+            foreach (['', '_gz'] as $encoding) {
+                $file = "{$dir}/index{$scheme}.html{$encoding}";
+
+                if (file_exists($file)) {
+                    wp_delete_file($file);
+                }
+            }
+        }
     }
 
     /**
@@ -1360,27 +1608,27 @@ class GzipCache
     }
 
     /**
-     * Retrieves the hostname for use in the cache directory file path.
+     * Get the hostname for a specific site.
      *
-     * @return string the hostname or localhost if unable to determine
+     * @param null|int $blog_id Site/blog ID. Defaults to current site.
+     *
+     * @return string
      */
-    private function get_host()
+    private function get_host($blog_id = null)
     {
-        if (!empty($_SERVER['HTTP_HOST'])) {
-            $host = sanitize_text_field(wp_unslash($_SERVER['HTTP_HOST']));
-        } elseif ($env_host = getenv('HTTP_HOST')) {
-            $host = $env_host;
-        } elseif (!empty($_SERVER['SERVER_NAME'])) {
-            $host = sanitize_text_field(wp_unslash($_SERVER['SERVER_NAME']));
-        } else {
-            $host = 'localhost';
+        if (is_multisite()) {
+            $site = get_site($blog_id ?: get_current_blog_id());
+
+            if ($site && !empty($site->domain)) {
+                return $site->domain;
+            }
         }
 
-        $host = strtolower($host);
-        $host = preg_replace('/:\d+$/', '', $host); // remove port if present
-        $host = preg_replace('/[^a-z0-9\-\.]/', '_', $host); // replace unwanted chars
+        $url = $blog_id
+            ? get_home_url($blog_id)
+            : home_url();
 
-        return $host;
+        return wp_parse_url($url, PHP_URL_HOST) ?: '';
     }
 
     /**

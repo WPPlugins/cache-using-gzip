@@ -58,6 +58,14 @@ if ($https = "on") {
     set $gz_cache_hsts 1;
 }
 
+# Behind a proxy, load balancer or Cloudflare Tunnel, nginx itself receives plain HTTP
+# and $https is empty. Trust X-Forwarded-Proto so the -https cache file is found
+# (matches the X-Forwarded-Proto check in the Apache rules).
+if ($http_x_forwarded_proto = "https") {
+    set $gz_cache_https_prefix "-https";
+    set $gz_cache_hsts 1;
+}
+
 # If HSTS is disabled, unset HSTS
 if ($gz_cache_hsts = "0") {
     set $gz_cache_hsts_value "";
@@ -127,6 +135,7 @@ location ~ /wp-content/cugz_gzip_cache/.*html$ {
     etag on;
     add_header Vary "Accept-Encoding, Cookie";
     add_header Cache-Control "no-cache, no-store, must-revalidate";
+    add_header X-Cache-Status "HIT";
     add_header X-Cache-Serving-Static $serving_static;
     add_header X-Cache-Reason $gz_cache_reason;
     add_header X-Cache-File $gz_cache_file;
@@ -150,6 +159,7 @@ location ~ /wp-content/cugz_gzip_cache/.*_gz$ {
     add_header Content-Encoding gzip;
     add_header Vary "Accept-Encoding, Cookie";
     add_header Cache-Control "no-cache, no-store, must-revalidate";
+    add_header X-Cache-Status "HIT";
     add_header X-Cache-Serving-Static $serving_static;
     add_header X-Cache-Reason $gz_cache_reason;
     add_header X-Cache-File $gz_cache_file;
